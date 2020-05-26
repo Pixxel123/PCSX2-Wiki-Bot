@@ -13,6 +13,7 @@ game_search = 'Stepping Selection'
 # game_search = 'Ratchet Clank'
 # game_search = 'Jak II'
 # game_search = 'God of War'
+game_search = 'Thunder Force VI'
 
 summon_phrase = 'WikiBot! '
 
@@ -97,9 +98,7 @@ def find_issues(game_page):
                     pass
     # Some pages may not have a Known Issues section
     except AttributeError:
-        no_issues_found = 'No issues found'
-        active_issues.append(no_issues_found)
-        fixed_issues.append(no_issues_found)
+        pass
     Game_Issues = namedtuple('Issues', [
         'active',
         'fixed',
@@ -147,22 +146,21 @@ def bot_message(game_lookup):
             reply_table += str(generate_table(html))
         except AttributeError:
             reply_table = 'No compatibility information found'
-        try:
-            issues = find_issues(html)
-            # If active issues is not empty
-            if len(issues[0]) != 0:
-                issue_message = '\n\n**Active issues:**\n\n'
-                for issue in issues.active:
-                    issue_message += f"* {issue}\n"
-        except AttributeError:
-            print('No issue information found')
-        else:
-            # If fixed issues is not empty
-            if len(issues[1]) != 0:
-                issue_message += '\n\n**Fixed issues:**\n\n'
-                for issue in issues.fixed:
-                    issue_message += f"* {issue}\n"
+        issues = find_issues(html)
+        # If active issues is not empty
+        if issues.active:
+            issue_message = '\n\n**Active issues:**\n\n'
+            for issue in issues.active:
+                issue_message += f"* {issue}\n"
+        # If fixed issues is not empty
+        if issues.fixed:
+            issue_message += '\n\n**Fixed issues:**\n\n'
+            for issue in issues.fixed:
+                issue_message += f"* {issue}\n"
+        if not issues.active and not issues.fixed:
+            issue_message = '\n\nNo active or fixed issues found.'
         bot_reply = f"## [{game.title}]({game.page_url})\n\n{reply_table}{issue_message}"
+        print(bot_reply)
         return bot_reply
 
 
