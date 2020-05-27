@@ -6,14 +6,14 @@ from pytablewriter import MarkdownTableWriter
 import io
 
 wiki_url = 'https://wiki.pcsx2.net'
+github_link = 'https://github.com/Pixxel123/PCSX2-Wiki-Bot'
 
 # Game has only NTSC-J info
-game_search = 'Stepping Selection'
+# game_search = 'Stepping Selection'
 # Game has all 3 regions info
-# game_search = 'Ratchet Clank'
 # game_search = 'Jak II'
 # game_search = 'God of War'
-game_search = 'Thunder Force VI'
+# game_search = 'Thunder Force VI'
 
 summon_phrase = 'WikiBot! '
 
@@ -25,8 +25,6 @@ def get_game_info(game_search):
               'go': 'Go'
               }
     res = session.get(url=wiki_url, params=params)
-    # When on search page, h1 is "Search results":
-    # <h1 id="firstHeading" class="firstHeading" lang="en">Search results</h1>
     game_page = requests.get(res.url)
     html = bs(game_page.content, 'lxml')
     # When on game page, h1 firstHeading is NOT Search results
@@ -51,8 +49,8 @@ def parse_search(search_page):
     return found_games
 
 
-def find_compatibility(game_lookup):
-    html = get_game_info(game_search).page_html
+def find_compatibility(game_page):
+    html = game_page
     compatibility_table = []
     regions = html.find_all('th', string=re.compile(r'^(Region).*:$'))
     for region in regions:
@@ -78,7 +76,7 @@ def find_compatibility(game_lookup):
 
 
 def find_issues(game_page):
-    html = get_game_info(game_search).page_html
+    html = game_page
     active_issues = []
     fixed_issues = []
     try:
@@ -131,37 +129,55 @@ def generate_table(game_page):
     return writer.stream.getvalue()
 
 
+def display_game_info(game_lookup):
+    game = get_game_info(game_lookup)
+    html = game.page_html
+    try:
+        reply_table = '### Compatibility table\n\n'
+        reply_table += str(generate_table(html))
+    except AttributeError:
+        reply_table = 'No compatibility information found'
+    issues = find_issues(html)
+    # If active issues is not empty
+    if issues.active:
+        issue_message = '\n\n**Active issues:**\n\n'
+        for issue in issues.active:
+            issue_message += f"* {issue}\n"
+    # If fixed issues is not empty
+    if issues.fixed:
+        issue_message += '\n\n**Fixed issues:**\n\n'
+        for issue in issues.fixed:
+            issue_message += f"* {issue}\n"
+    if not issues.active and not issues.fixed:
+        issue_message = '\n\nNo active or fixed issues found.'
+    bot_reply = f"## [{game.title}]({game.page_url})\n\n{reply_table}{issue_message}"
+    return bot_reply
+
+
 def bot_message(game_lookup):
     game = get_game_info(game_lookup)
     html = game.page_html
-    """
-    # TODO: Handle multiple search results
-    # (fuzzy match with first 3 results, show first in bot main message, then links to other two at the bottom?)
-    """
     if game.title == 'Search results':
-        parse_search(html)
+        results = parse_search(html)
+        # Immediately show information if there is only one result
+        if len(results) <= 2:
+            game_search = results[0]['name']
+            search_bot_reply = display_game_info(game_search)
+        else:
+            # ? Could use fuzzy matching to pull out best result from search?
+            search_bot_reply = f"No direct match found for {game_lookup}, displaying {len(results)} results:\n\n"
+            search_results = ''
+            for result in results:
+                search_results += f"[{result['name']}]({result['link']})\n\n"
+            search_bot_reply += search_results
+        return search_bot_reply
     else:
-        try:
-            reply_table = '### Compatibility table\n\n'
-            reply_table += str(generate_table(html))
-        except AttributeError:
-            reply_table = 'No compatibility information found'
-        issues = find_issues(html)
-        # If active issues is not empty
-        if issues.active:
-            issue_message = '\n\n**Active issues:**\n\n'
-            for issue in issues.active:
-                issue_message += f"* {issue}\n"
-        # If fixed issues is not empty
-        if issues.fixed:
-            issue_message += '\n\n**Fixed issues:**\n\n'
-            for issue in issues.fixed:
-                issue_message += f"* {issue}\n"
-        if not issues.active and not issues.fixed:
-            issue_message = '\n\nNo active or fixed issues found.'
-        bot_reply = f"## [{game.title}]({game.page_url})\n\n{reply_table}{issue_message}"
-        print(bot_reply)
-        return bot_reply
+        return display_game_info(game_lookup)
 
 
-bot_message(game_search)
+def run_bot():
+    game_search = 'San Andreas'
+    bot_message(game_search)
+
+
+run_bot()
