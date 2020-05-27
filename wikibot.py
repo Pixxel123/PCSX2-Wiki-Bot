@@ -1,19 +1,29 @@
 import requests
 from bs4 import BeautifulSoup as bs
+from fuzzywuzzy import fuzz
+from fuzzywuzzy import process
 import re
 from collections import namedtuple
 from pytablewriter import MarkdownTableWriter
 import io
+import logging
+import logging.config
+
+# Logging allows replacing print statements to show more information
+# This config outputs human-readable time, the log level, the log message and the line number this originated from
+logging.basicConfig(
+    format='%(asctime)s (%(levelname)s) %(message)s (Line %(lineno)d)', level=logging.DEBUG)
+
+# PRAW seems to have its own logging which clutters up console output, so this disables everything but Python's logging
+logging.config.dictConfig({
+    'version': 1,
+    'disable_existing_loggers': True
+})
+
 
 wiki_url = 'https://wiki.pcsx2.net'
 github_link = 'https://github.com/Pixxel123/PCSX2-Wiki-Bot'
 
-# Game has only NTSC-J info
-# game_search = 'Stepping Selection'
-# Game has all 3 regions info
-# game_search = 'Jak II'
-# game_search = 'God of War'
-# game_search = 'Thunder Force VI'
 
 summon_phrase = 'WikiBot! '
 
@@ -38,11 +48,13 @@ def get_game_info(game_search):
     return game
 
 
-def parse_search(search_page):
+def parse_search_page(search_page):
     html = search_page
     found_games = []
+    # Find games by "page title matches" section of page
     search_results = html.find('ul', class_='mw-search-results')
     for result in search_results.find_all('a', href=True):
+        # Since search results can be finnicky, use the wiki's official game names for results
         game_name = result.string
         game_link = f"{wiki_url}{result.get('href')}"
         found_games.append({'name': game_name, 'link': game_link})
@@ -138,9 +150,10 @@ def display_game_info(game_lookup):
     except AttributeError:
         reply_table = 'No compatibility information found'
     issues = find_issues(html)
+    issue_message = ''
     # If active issues is not empty
     if issues.active:
-        issue_message = '\n\n**Active issues:**\n\n'
+        issue_message += '\n\n**Active issues:**\n\n'
         for issue in issues.active:
             issue_message += f"* {issue}\n"
     # If fixed issues is not empty
@@ -150,34 +163,57 @@ def display_game_info(game_lookup):
             issue_message += f"* {issue}\n"
     if not issues.active and not issues.fixed:
         issue_message = '\n\nNo active or fixed issues found.'
-    bot_reply = f"## [{game.title}]({game.page_url})\n\n{reply_table}{issue_message}"
-    return bot_reply
+    bot_reply_info = f"## [{game.title}]({game.page_url})\n\n{reply_table}{issue_message}"
+    return bot_reply_info
 
 
 def bot_message(game_lookup):
-    game = get_game_info(game_lookup)
-    html = game.page_html
-    if game.title == 'Search results':
-        results = parse_search(html)
-        # Immediately show information if there is only one result
-        if len(results) <= 2:
-            game_search = results[0]['name']
-            search_bot_reply = display_game_info(game_search)
-        else:
-            # ? Could use fuzzy matching to pull out best result from search?
-            search_bot_reply = f"No direct match found for {game_lookup}, displaying {len(results)} results:\n\n"
-            search_results = ''
+    try:
+        game = get_game_info(game_lookup)
+        html = game.page_html
+        if game.title == 'Search results':
+            # Choices for fuzzy matching search results
+            choices = []
+            results = parse_search_page(html)
             for result in results:
-                search_results += f"[{result['name']}]({result['link']})\n\n"
-            search_bot_reply += search_results
-        return search_bot_reply
-    else:
-        return display_game_info(game_lookup)
+                search_choice = result['name']
+                # Handle user inputs with fuzzy matching
+                # ! token_set_ratio ignores word order and duplicated words
+                match_criteria = fuzz.token_set_ratio(
+                    game_lookup.lower(), search_choice.lower())
+                if match_criteria >= 50:
+                    choices.append({'game_name': search_choice})
+            try:
+                closest_match = process.extractOne(
+                    game_lookup, choices, scorer=fuzz.token_set_ratio, score_cutoff=95)
+                game_search = closest_match[0]['game_name']
+                bot_reply = display_game_info(game_search)
+            except TypeError:
+                # Limits results so that users are not overwhelmed with links
+                limit_results = results[:5]
+                bot_reply = f"No direct match found for **{game_lookup}**, displaying {len(limit_results)} wiki results:\n\n"
+                search_results = ''
+                for result in limit_results:
+                    search_results += f"[{result['name']}]({result['link']})\n\n"
+                bot_reply += search_results
+                bot_reply += "Feel free to ask me again (`WikiBot! game name`) with these game names or visit the wiki directly!"
+            # Pass allows footer to be appended
+            pass
+        else:
+            # If game string does not trigger search page, show info directly
+            bot_reply = display_game_info(game_lookup)
+    # Handles no results being found in search
+    except AttributeError:
+        bot_reply = f"I'm sorry, I couldn't find any information on **{game_lookup}**.\n\nPlease feel free to try again; perhaps you had a spelling mistake, or your game does not exist in the [PCSX2 Wiki]({wiki_url})."
+    # Append footer to bot message
+    bot_reply += f"\n---\n^(I'm a bot, and should only be used for reference. All of my information comes from the contributors at the) [^PCSX2 ^Wiki]({wiki_url})^. ^(If there are any issues, please contact my) ^[Creator](https://www.reddit.com/message/compose/?to=theoriginal123123&subject=/u/PCSX2-Wiki-Bot)\n\n[^GitHub]({github_link})"
+    return bot_reply
 
 
 def run_bot():
-    game_search = 'San Andreas'
-    bot_message(game_search)
+    logging.info('Bot started!')
+    game_search = 'fasfasfda'
+    print(bot_message(game_search))
 
 
 run_bot()
