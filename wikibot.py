@@ -2,10 +2,13 @@ import requests
 from bs4 import BeautifulSoup as bs
 from fuzzywuzzy import fuzz
 from fuzzywuzzy import process
-import re
 from collections import namedtuple
 from pytablewriter import MarkdownTableWriter
 import io
+import praw
+import re
+import time
+import os
 import logging
 import logging.config
 
@@ -26,6 +29,18 @@ github_link = 'https://github.com/Pixxel123/PCSX2-Wiki-Bot'
 
 
 summon_phrase = 'WikiBot! '
+
+
+def bot_login():
+    logging.info('Authenticating...')
+    reddit = praw.Reddit(
+        client_id=os.getenv('reddit_client_id'),
+        client_secret=os.getenv('reddit_client_secret'),
+        password=os.getenv('reddit_password'),
+        user_agent=os.getenv('reddit_user_agent'),
+        username=os.getenv('reddit_username'))
+    logging.info(f"Authenticated as {reddit.user.me()}")
+    return reddit
 
 
 def get_game_info(game_search):
@@ -145,7 +160,7 @@ def display_game_info(game_lookup):
     game = get_game_info(game_lookup)
     html = game.page_html
     try:
-        reply_table = '### Compatibility table\n\n'
+        reply_table = '#### **Compatibility table**\n\n'
         reply_table += str(generate_table(html))
     except AttributeError:
         reply_table = 'No compatibility information found'
@@ -196,7 +211,7 @@ def bot_message(game_lookup):
                 for result in limit_results:
                     search_results += f"[{result['name']}]({result['link']})\n\n"
                 bot_reply += search_results
-                bot_reply += "Feel free to ask me again (`WikiBot! game name`) with these game names or visit the wiki directly!"
+                bot_reply += "\n\nFeel free to ask me again (`WikiBot! game name`) with these game names or visit the wiki directly!"
             # Pass allows footer to be appended
             pass
         else:
@@ -206,14 +221,75 @@ def bot_message(game_lookup):
     except AttributeError:
         bot_reply = f"I'm sorry, I couldn't find any information on **{game_lookup}**.\n\nPlease feel free to try again; perhaps you had a spelling mistake, or your game does not exist in the [PCSX2 Wiki]({wiki_url})."
     # Append footer to bot message
-    bot_reply += f"\n---\n^(I'm a bot, and should only be used for reference. All of my information comes from the contributors at the) [^PCSX2 ^Wiki]({wiki_url})^. ^(If there are any issues, please contact my) ^[Creator](https://www.reddit.com/message/compose/?to=theoriginal123123&subject=/u/PCSX2-Wiki-Bot)\n\n[^GitHub]({github_link})"
+    bot_reply += f"\n\n---\n\n^(I'm a bot, and should only be used for reference. All of my information comes from the contributors at the) [^PCSX2 ^Wiki]({wiki_url})^. ^(If there are any issues, please contact my) ^[Creator](https://www.reddit.com/message/compose/?to=theoriginal123123&subject=/u/PCSX2-Wiki-Bot)\n\n[^GitHub]({github_link})"
     return bot_reply
 
 
 def run_bot():
-    logging.info('Bot started!')
-    game_search = 'fasfasfda'
-    print(bot_message(game_search))
+    try:
+        logging.info('Bot started!')
+        # look for summon_phrase and reply
+        for comment in subreddit.stream.comments():
+            # allows bot command to NOT be case-sensitive and ignores comments made by the bot
+            if summon_phrase.lower() in comment.body.lower() and comment.author.name != reddit.user.me():
+                if not comment.saved:
+                    # regex allows cpubot to be called in the middle of most sentences
+                    game_search = re.search(
+                        f"({summon_phrase})([^!,?\n\r]*)", comment.body, re.IGNORECASE)
+                    if game_search:
+                        game_search = game_search.group(2)
+                    comment.reply(bot_message(game_search))
+                    comment = reddit.comment(id=f"{comment.id}")
+                    # Note: the Reddit API has a 1000 item limit on viewing things, so after 1000 saves, the ones prior (999 and back) will not be visible,
+                    # but reddit will still keep them saved.
+                    # If you are just checking that an item is saved, there is no limit.
+                    # However, saving an item takes an extra API call which can slow down a high-traffic bot.
+                    comment.save()
+                    logging.info('Comment posted!')
+    except Exception as error:
+        # saves comment where CPU info cannot be found so bot is not triggered again
+        comment.save()
+        # dealing with low karma posting restriction
+        # bot will use rate limit error to decide how long to sleep for
+        time_remaining = 15
+        error_message = str(error).split()
+        if (error_message[0] == 'RATELIMIT:'):
+            units = ['minute', 'minutes']
+            # split rate limit warning to grab amount of time
+            for i in error_message:
+                if (i.isdigit()):
+                    #  check if time units are present in string
+                    for unit in units:
+                        if unit in error_message:
+                            #  if minutes, convert to seconds for sleep
+                            time_remaining = int(i) * 60
+                        else:
+                            #  if seconds, use directly for sleep
+                            time_remaining = int(i)
+                            break
+                        break
+        #  display error type and string
+        logging.exception(repr(error))
+        #  loops backwards through seconds remaining before retry
+        for i in range(time_remaining, 0, -5):
+            logging.info(f"Retrying in {i} seconds...")
+            time.sleep(5)
 
 
-run_bot()
+if __name__ == '__main__':
+    while True:
+        logging.info('Bot starting...')
+        try:
+            reddit = bot_login()
+            # uses environment variable to detect whether in Heroku
+            if 'DYNO' in os.environ:
+                subreddit = reddit.subreddit('pcsx2')
+            else:
+                # if working locally, use .env files
+                import dotenv
+                dotenv.load_dotenv()
+                subreddit = reddit.subreddit('cpubottest')
+            run_bot()
+        except Exception as error:
+            logging.exception(repr(error))
+            time.sleep(20)
