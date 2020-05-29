@@ -15,7 +15,7 @@ import logging.config
 # Logging allows replacing print statements to show more information
 # This config outputs human-readable time, the log level, the log message and the line number this originated from
 logging.basicConfig(
-    format='%(asctime)s (%(levelname)s) %(message)s (Line %(lineno)d)', level=logging.DEBUG)
+    format='%(asctime)s (%(levelname)s) %(message)s (Line %(lineno)d)', level=logging.INFO)
 
 # PRAW seems to have its own logging which clutters up console output, so this disables everything but Python's logging
 logging.config.dictConfig({
@@ -23,12 +23,34 @@ logging.config.dictConfig({
     'disable_existing_loggers': True
 })
 
-
-wiki_url = 'https://wiki.pcsx2.net'
+wiki_base_url = 'https://wiki.pcsx2.net'
+wiki_complete_url = 'https://wiki.pcsx2.net/Complete_List_of_Games'
 github_link = 'https://github.com/Pixxel123/PCSX2-Wiki-Bot'
 
 
 summon_phrase = 'WikiBot! '
+
+
+def get_games_list():
+    logging.info("Getting games list from PCSX2 wiki...")
+    session = requests.Session()
+    res = session.get(wiki_complete_url)
+    html = bs(res.content, 'lxml')
+    game_table = html.find('table', class_='wikitable').find('tbody')
+    games_list = {}
+    # Ignores header row
+    for row in game_table.find_all('tr')[1:]:
+        # There are some hidden rows containing region info only,
+        # skip as there is no game name or link
+        try:
+            cell = row.find_all('td')[0]
+            game_name = cell.contents[0].attrs['title']
+            game_link = cell.contents[0].attrs['href']
+            games_list[game_name] = wiki_base_url + game_link
+        except AttributeError:
+            continue
+    logging.info(f"Grabbed {len(games_list)} games from wiki")
+    return games_list
 
 
 def bot_login():
@@ -43,37 +65,14 @@ def bot_login():
     return reddit
 
 
-def get_game_info(game_search):
+def get_game_html(game_search):
+    game_search_url = games_list[game_search]
     session = requests.Session()
-    params = {'search': game_search,
-              'title': 'Special:Search',
-              'go': 'Go'
-              }
-    res = session.get(url=wiki_url, params=params)
+    res = session.get(game_search_url)
     game_page = requests.get(res.url)
+    # Gets HTML output of page for parsing
     html = bs(game_page.content, 'lxml')
-    # When on game page, h1 firstHeading is NOT Search results
-    game_title = html.find('h1', {'id': 'firstHeading'}).text
-    Game = namedtuple('Game', [
-        'title',
-        'page_url',
-        'page_html',
-    ])
-    game = Game(game_title, game_page.url, html)
-    return game
-
-
-def parse_search_page(search_page):
-    html = search_page
-    found_games = []
-    # Find games by "page title matches" section of page
-    search_results = html.find('ul', class_='mw-search-results')
-    for result in search_results.find_all('a', href=True):
-        # Since search results can be finnicky, use the wiki's official game names for results
-        game_name = result.string
-        game_link = f"{wiki_url}{result.get('href')}"
-        found_games.append({'name': game_name, 'link': game_link})
-    return found_games
+    return html
 
 
 def find_compatibility(game_page):
@@ -156,9 +155,9 @@ def generate_table(game_page):
     return writer.stream.getvalue()
 
 
+# Game name gets passed in for the lookup
 def display_game_info(game_lookup):
-    game = get_game_info(game_lookup)
-    html = game.page_html
+    html = get_game_html(game_lookup)
     try:
         reply_table = '#### **Compatibility table**\n\n'
         reply_table += str(generate_table(html))
@@ -178,50 +177,46 @@ def display_game_info(game_lookup):
             issue_message += f"* {issue}\n"
     if not issues.active and not issues.fixed:
         issue_message = '\n\nNo active or fixed issues found.'
-    bot_reply_info = f"## [{game.title}]({game.page_url})\n\n{reply_table}{issue_message}"
+    bot_reply_info = f"## [{game_lookup}]({games_list[game_lookup]})\n\n{reply_table}{issue_message}"
     return bot_reply_info
 
 
 def bot_message(game_lookup):
     try:
-        game = get_game_info(game_lookup)
-        html = game.page_html
-        if game.title == 'Search results':
-            # Choices for fuzzy matching search results
-            choices = []
-            results = parse_search_page(html)
-            for result in results:
-                search_choice = result['name']
-                # Handle user inputs with fuzzy matching
-                # ! token_set_ratio ignores word order and duplicated words
-                match_criteria = fuzz.token_set_ratio(
-                    game_lookup.lower(), search_choice.lower())
-                if match_criteria >= 50:
-                    choices.append({'game_name': search_choice})
+        if game_lookup == '':
+            bot_reply = "I need a search term to work with! Please try `WikiBot! <game name>`"
+        else:
+            # run bot if not blank
             try:
+                choices = []
+                for game in games_list:
+                    # lower for case-insensitive match
+                    match_criteria = fuzz.token_set_ratio(
+                        game_lookup.lower().strip(), game.lower())
+                    if match_criteria >= 70:
+                        choices.append(game)
+                # score_cutoff used to lessen false matches set to 85 to allow less strictness on things like abbreviations
+                # such as GTA San Andreas
                 closest_match = process.extractOne(
-                    game_lookup, choices, scorer=fuzz.token_set_ratio, score_cutoff=95)
-                game_search = closest_match[0]['game_name']
-                bot_reply = display_game_info(game_search)
+                    game_lookup, choices, scorer=fuzz.token_set_ratio, score_cutoff=85)
+                closest_match_name = closest_match[0]
+                bot_reply = display_game_info(closest_match_name)
             except TypeError:
                 # Limits results so that users are not overwhelmed with links
-                limit_results = results[:5]
-                bot_reply = f"No direct match found for **{game_lookup}**, displaying {len(limit_results)} wiki results:\n\n"
+                limit_choices = process.extractBests(
+                    game_lookup, choices, scorer=fuzz.token_set_ratio)
+                bot_reply = f"No direct match found for **{game_lookup}**, displaying {len(limit_choices)} wiki results:\n\n"
                 search_results = ''
-                for result in limit_results:
-                    search_results += f"[{result['name']}]({result['link']})\n\n"
+                for result in limit_choices[:6]:
+                    game_name = result[0]
+                    search_results += f"[{game_name}]({games_list[game_name]})\n\n"
                 bot_reply += search_results
                 bot_reply += "\n\nFeel free to ask me again (`WikiBot! game name`) with these game names or visit the wiki directly!\n"
-            # Pass allows footer to be appended
-            pass
-        else:
-            # If game string does not trigger search page, show info directly
-            bot_reply = display_game_info(game_lookup)
     # Handles no results being found in search
     except AttributeError:
-        bot_reply = f"I'm sorry, I couldn't find any information on **{game_lookup}**.\n\nPlease feel free to try again; perhaps you had a spelling mistake, or your game does not exist in the [PCSX2 Wiki]({wiki_url})."
+        bot_reply = f"I'm sorry, I couldn't find any information on **{game_lookup}**.\n\nPlease feel free to try again; perhaps you had a spelling mistake, or your game does not exist in the [PCSX2 Wiki]({wiki_base_url})."
     # Append footer to bot message
-    bot_reply += f"\n\n---\n\n^(I'm a bot, and should only be used for reference. All of my information comes from the contributors at the) [^PCSX2 ^Wiki]({wiki_url})^. ^(If there are any issues, please contact my) ^[Creator](https://www.reddit.com/message/compose/?to=theoriginal123123&subject=/u/PCSX2-Wiki-Bot)\n\n[^GitHub]({github_link})\n"
+    bot_reply += f"\n\n---\n\n^(I'm a bot, and should only be used for reference. All of my information comes from the contributors at the) [^PCSX2 ^Wiki]({wiki_base_url})^. ^(If there are any issues, please contact my) ^[Creator](https://www.reddit.com/message/compose/?to=theoriginal123123&subject=/u/PCSX2-Wiki-Bot)\n\n[^GitHub]({github_link})\n"
     return bot_reply
 
 
@@ -233,7 +228,7 @@ def run_bot():
             # allows bot command to NOT be case-sensitive and ignores comments made by the bot
             if summon_phrase.lower() in comment.body.lower() and comment.author.name != reddit.user.me():
                 if not comment.saved:
-                    # regex allows cpubot to be called in the middle of most sentences
+                    # regex allows bot to be called in the middle of most sentences
                     game_search = re.search(
                         f"({summon_phrase})([^!,?\n\r]*)", comment.body, re.IGNORECASE)
                     if game_search:
@@ -247,7 +242,7 @@ def run_bot():
                     comment.save()
                     logging.info('Comment posted!')
     except Exception as error:
-        # saves comment where CPU info cannot be found so bot is not triggered again
+        # saves comment where info cannot be found so bot is not triggered again
         comment.save()
         # dealing with low karma posting restriction
         # bot will use rate limit error to decide how long to sleep for
@@ -275,6 +270,8 @@ def run_bot():
             logging.info(f"Retrying in {i} seconds...")
             time.sleep(5)
 
+
+games_list = get_games_list()
 
 if __name__ == '__main__':
     while True:
