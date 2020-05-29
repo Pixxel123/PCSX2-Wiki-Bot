@@ -69,9 +69,8 @@ def get_game_html(game_search):
     game_search_url = games_list[game_search]
     session = requests.Session()
     res = session.get(game_search_url)
-    game_page = requests.get(res.url)
     # Gets HTML output of page for parsing
-    html = bs(game_page.content, 'lxml')
+    html = bs(res.content, 'lxml')
     return html
 
 
