@@ -189,14 +189,15 @@ def bot_message(game_lookup):
             try:
                 choices = []
                 for game in games_list:
-                    # lower for case-insensitive match, strip out spaces
-                    match_criteria = fuzz.ratio(
-                        game_lookup.lower().replace(' ', ''), game.lower().replace(' ', ''))
+                    # strip out spaces/non-word characters and lower for case-insensitive match
+                    cleaned_lookup = re.sub(r'\W', '', game_lookup).lower()
+                    cleaned_game = re.sub(r'\W', '', game).lower()
+                    match_criteria = fuzz.ratio(cleaned_lookup, cleaned_game)
                     # looser criteria attempts to allow abbreviations to be caught
                     if match_criteria >= 48:
                         choices.append(game)
                 closest_match = process.extractOne(
-                    game_lookup, choices, score_cutoff=90)
+                    game_lookup, choices, score_cutoff=85)
                 closest_match_name = closest_match[0]
                 bot_reply = display_game_info(closest_match_name)
             except TypeError:
