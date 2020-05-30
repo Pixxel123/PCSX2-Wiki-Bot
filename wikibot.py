@@ -189,15 +189,13 @@ def bot_message(game_lookup):
             try:
                 choices = []
                 for game in games_list:
-                    # lower for case-insensitive match
-                    match_criteria = fuzz.token_set_ratio(
-                        game_lookup.lower().strip(), game.lower())
-                    if match_criteria >= 70:
+                    # lower for case-insensitive match, strip out spaces
+                    match_criteria = fuzz.ratio(
+                        game_lookup.lower().replace(' ', ''), game.lower().replace(' ', ''))
+                    if match_criteria >= 60:
                         choices.append(game)
-                # score_cutoff used to lessen false matches set to 85 to allow less strictness on things like abbreviations
-                # such as GTA San Andreas
                 closest_match = process.extractOne(
-                    game_lookup, choices, scorer=fuzz.token_set_ratio, score_cutoff=85)
+                    game_lookup, choices, score_cutoff=90)
                 closest_match_name = closest_match[0]
                 bot_reply = display_game_info(closest_match_name)
             except TypeError:
