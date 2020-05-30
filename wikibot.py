@@ -203,13 +203,14 @@ def bot_message(game_lookup):
             except TypeError:
                 # Limits results so that users are not overwhelmed with links
                 limit_choices = process.extractBests(game_lookup, choices)
-                bot_reply = f"No direct match found for **{game_lookup}**, displaying {len(limit_choices)} wiki results:\n\n"
-                search_results = ''
-                for result in limit_choices[:6]:
-                    game_name = result[0]
-                    search_results += f"[{game_name}]({games_list[game_name]})\n\n"
-                bot_reply += search_results
-                bot_reply += "\n\nFeel free to ask me again (`WikiBot! game name`) with these game names or visit the wiki directly!\n"
+                if limit_choices:
+                    bot_reply = f"No direct match found for **{game_lookup}**, displaying {len(limit_choices)} wiki results:\n\n"
+                    search_results = ''
+                    for result in limit_choices[:6]:
+                        game_name = result[0]
+                        search_results += f"[{game_name}]({games_list[game_name]})\n\n"
+                    bot_reply += search_results
+                    bot_reply += "\n\nFeel free to ask me again (`WikiBot! game name`) with these game names or visit the wiki directly!\n"
     # Handles no results being found in search
     except AttributeError:
         bot_reply = f"I'm sorry, I couldn't find any information on **{game_lookup}**.\n\nPlease feel free to try again; perhaps you had a spelling mistake, or your game does not exist in the [PCSX2 Wiki]({wiki_base_url})."
