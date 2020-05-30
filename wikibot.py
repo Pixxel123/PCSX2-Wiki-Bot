@@ -192,7 +192,8 @@ def bot_message(game_lookup):
                     # lower for case-insensitive match, strip out spaces
                     match_criteria = fuzz.ratio(
                         game_lookup.lower().replace(' ', ''), game.lower().replace(' ', ''))
-                    if match_criteria >= 60:
+                    # looser criteria attempts to allow abbreviations to be caught
+                    if match_criteria >= 48:
                         choices.append(game)
                 closest_match = process.extractOne(
                     game_lookup, choices, score_cutoff=90)
@@ -200,8 +201,7 @@ def bot_message(game_lookup):
                 bot_reply = display_game_info(closest_match_name)
             except TypeError:
                 # Limits results so that users are not overwhelmed with links
-                limit_choices = process.extractBests(
-                    game_lookup, choices, scorer=fuzz.token_set_ratio)
+                limit_choices = process.extractBests(game_lookup, choices)
                 bot_reply = f"No direct match found for **{game_lookup}**, displaying {len(limit_choices)} wiki results:\n\n"
                 search_results = ''
                 for result in limit_choices[:6]:
@@ -239,8 +239,6 @@ def run_bot():
                     comment.save()
                     logging.info('Comment posted!')
     except Exception as error:
-        # saves comment where info cannot be found so bot is not triggered again
-        comment.save()
         # dealing with low karma posting restriction
         # bot will use rate limit error to decide how long to sleep for
         time_remaining = 15
@@ -260,6 +258,11 @@ def run_bot():
                             time_remaining = int(i)
                             break
                         break
+        else:
+            # If not rate limited, save comment where info cannot be found
+            # so bot is not triggered again
+            comment.save()
+            logging.info("Comment saved after exception.")
         #  display error type and string
         logging.exception(repr(error))
         #  loops backwards through seconds remaining before retry
